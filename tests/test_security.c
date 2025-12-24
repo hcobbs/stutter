@@ -172,5 +172,88 @@ void test_security(void)
         generator_shutdown(&gen);
     }
 
+    /*
+     * Test 5: Key Parking API
+     *
+     * Verify that parking/unparking works correctly and that a parked
+     * generator auto-unparks when stutter_rand is called.
+     */
+    {
+        unsigned char buf[32];
+        int result;
+
+        result = stutter_init();
+        TEST_ASSERT(result == STUTTER_OK);
+
+        /* Generate some data to create a generator */
+        result = stutter_rand(buf, sizeof(buf));
+        TEST_ASSERT(result == STUTTER_OK);
+
+        /* Should not be parked initially */
+        TEST_ASSERT(stutter_is_generator_parked() == 0);
+
+        /* Park the generator */
+        result = stutter_park_generator();
+        TEST_ASSERT(result == STUTTER_OK);
+        TEST_ASSERT(stutter_is_generator_parked() == 1);
+
+        /* Parking again should be a no-op (idempotent) */
+        result = stutter_park_generator();
+        TEST_ASSERT(result == STUTTER_OK);
+        TEST_ASSERT(stutter_is_generator_parked() == 1);
+
+        /* Generate data - should auto-unpark */
+        result = stutter_rand(buf, sizeof(buf));
+        TEST_ASSERT(result == STUTTER_OK);
+        TEST_ASSERT(stutter_is_generator_parked() == 0);
+
+        stutter_shutdown();
+    }
+
+    /*
+     * Test 6: Secure Alloc/Free API
+     *
+     * Verify that stutter_rand_secure_alloc returns non-NULL buffer
+     * with random data, and that stutter_rand_secure_free works.
+     */
+    {
+        void *buf1;
+        void *buf2;
+        int result;
+        int all_zero;
+        size_t i;
+
+        result = stutter_init();
+        TEST_ASSERT(result == STUTTER_OK);
+
+        /* Allocate secure buffer */
+        buf1 = stutter_rand_secure_alloc(32);
+        TEST_ASSERT(buf1 != NULL);
+
+        /* Verify it contains non-zero data (random) */
+        all_zero = 1;
+        for (i = 0; i < 32; i++) {
+            if (((unsigned char *)buf1)[i] != 0) {
+                all_zero = 0;
+                break;
+            }
+        }
+        TEST_ASSERT(!all_zero);
+
+        /* Allocate another buffer, should be different */
+        buf2 = stutter_rand_secure_alloc(32);
+        TEST_ASSERT(buf2 != NULL);
+        TEST_ASSERT(memcmp(buf1, buf2, 32) != 0);
+
+        /* Free both buffers */
+        stutter_rand_secure_free(buf1, 32);
+        stutter_rand_secure_free(buf2, 32);
+
+        /* Freeing NULL should be safe */
+        stutter_rand_secure_free(NULL, 0);
+
+        stutter_shutdown();
+    }
+
     test_suite_end();
 }

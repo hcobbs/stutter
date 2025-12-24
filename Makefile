@@ -31,12 +31,23 @@ CFLAGS = -Wall -Wextra -std=c89 -pedantic -g -O0 -fPIC -DSTUTTER_DEBUG
 CFLAGS += -I$(SRCDIR) -I$(INCDIR)
 endif
 
-# Linker flags
-LDFLAGS = -lpthread
+# RAMPart dependency
+RAMPART_DIR ?= ../RAMpart
+CFLAGS += -I$(RAMPART_DIR)/h
 
-# Platform-specific hardening (RELRO is Linux/BSD only, not macOS)
+# Linker flags
+LDFLAGS = -lpthread -lcrypto -L$(RAMPART_DIR)/lib -lrampart
+
+# Platform-specific settings
 UNAME_S := $(shell uname -s)
-ifneq ($(UNAME_S),Darwin)
+ifeq ($(UNAME_S),Darwin)
+# macOS: OpenSSL from Homebrew (check both Intel and Apple Silicon paths)
+HOMEBREW_PREFIX := $(shell brew --prefix 2>/dev/null || echo /usr/local)
+OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null || echo $(HOMEBREW_PREFIX)/opt/openssl)
+CFLAGS += -I$(OPENSSL_PREFIX)/include
+LDFLAGS += -L$(OPENSSL_PREFIX)/lib
+else
+# Linux/BSD: enable RELRO hardening
 LDFLAGS += -Wl,-z,relro,-z,now
 endif
 
@@ -59,6 +70,7 @@ SOURCES = \
 	$(SRCDIR)/accumulator.c \
 	$(SRCDIR)/generator.c \
 	$(SRCDIR)/entropy.c \
+	$(SRCDIR)/secure_mem.c \
 	$(SRCDIR)/stutter.c \
 	$(SRCDIR)/platform/posix.c
 
@@ -163,5 +175,6 @@ $(OBJDIR)/aes256.o: $(SRCDIR)/aes256.c $(SRCDIR)/stutter_internal.h
 $(OBJDIR)/accumulator.o: $(SRCDIR)/accumulator.c $(SRCDIR)/stutter_internal.h
 $(OBJDIR)/generator.o: $(SRCDIR)/generator.c $(SRCDIR)/stutter_internal.h
 $(OBJDIR)/entropy.o: $(SRCDIR)/entropy.c $(SRCDIR)/stutter_internal.h
-$(OBJDIR)/stutter.o: $(SRCDIR)/stutter.c $(SRCDIR)/stutter_internal.h $(INCDIR)/stutter.h
+$(OBJDIR)/secure_mem.o: $(SRCDIR)/secure_mem.c $(SRCDIR)/secure_mem.h $(SRCDIR)/stutter_internal.h
+$(OBJDIR)/stutter.o: $(SRCDIR)/stutter.c $(SRCDIR)/stutter_internal.h $(SRCDIR)/secure_mem.h $(INCDIR)/stutter.h
 $(OBJDIR)/platform/posix.o: $(SRCDIR)/platform/posix.c $(SRCDIR)/stutter_internal.h

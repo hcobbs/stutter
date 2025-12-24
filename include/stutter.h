@@ -34,6 +34,7 @@ extern "C" {
 #define STUTTER_ERR_LOCKED     -4   /* Resource locked (internal) */
 #define STUTTER_ERR_MEMORY     -5   /* Memory allocation failed */
 #define STUTTER_ERR_PLATFORM   -6   /* Platform-specific error */
+#define STUTTER_ERR_RAMPART    -7   /* RAMPart secure memory error */
 
 /* ============================================================================
  * Library Lifecycle
@@ -88,6 +89,36 @@ int stutter_rand(void *buf, size_t len);
  * Returns: STUTTER_OK on success, error code on failure.
  */
 int stutter_reseed(void);
+
+/*
+ * Generate random bytes into a secure memory buffer.
+ *
+ * Allocates a buffer from the thread-local RAMPart pool and fills it
+ * with random data. The buffer is protected by guard bands and will
+ * be securely wiped when freed with stutter_rand_secure_free().
+ *
+ * This is the recommended API for generating key material or other
+ * sensitive random data that should not persist in memory.
+ *
+ * Parameters:
+ *   len - Number of random bytes to generate
+ *
+ * Returns: Pointer to secure buffer on success, NULL on failure.
+ *          Caller must free with stutter_rand_secure_free().
+ */
+void *stutter_rand_secure_alloc(size_t len);
+
+/*
+ * Free a buffer allocated by stutter_rand_secure_alloc().
+ *
+ * Securely wipes the buffer contents before returning memory to the pool.
+ * Passing NULL is a no-op.
+ *
+ * Parameters:
+ *   ptr - Buffer to free (must have been returned by stutter_rand_secure_alloc)
+ *   len - Size of the buffer (must match the len passed to alloc)
+ */
+void stutter_rand_secure_free(void *ptr, size_t len);
 
 /* ============================================================================
  * Entropy Source Management
@@ -178,6 +209,31 @@ int stutter_is_seeded(void);
  * Useful for monitoring and debugging.
  */
 int stutter_get_reseed_count(void);
+
+/* ============================================================================
+ * Key Parking (RAMPart Integration)
+ * ============================================================================ */
+
+/*
+ * Park the current thread's generator key material.
+ *
+ * Encrypts the generator's sensitive state using ChaCha20 with a
+ * randomly generated key, providing protection against memory disclosure
+ * attacks while the generator is idle.
+ *
+ * The generator is automatically unparked when stutter_rand() is called.
+ * Calling this on an already-parked generator is a no-op.
+ *
+ * Returns: STUTTER_OK on success, error code on failure.
+ */
+int stutter_park_generator(void);
+
+/*
+ * Check if the current thread's generator is parked.
+ *
+ * Returns 1 if parked, 0 otherwise (including if no generator exists).
+ */
+int stutter_is_generator_parked(void);
 
 #ifdef __cplusplus
 }
