@@ -100,27 +100,19 @@ void test_aes256(void)
         aes256_done(&ctx);
     }
 
-    /* Test that aes256_done zeros the context */
+    /* Test that aes256_done cleans up the context */
     {
         const char *key_hex =
             "000102030405060708090a0b0c0d0e0f"
             "101112131415161718191a1b1c1d1e1f";
-        int is_zero = 1;
-        size_t i;
 
         hex_to_bytes(key_hex, key, 32);
 
         aes256_init(&ctx, key);
         aes256_done(&ctx);
 
-        /* Check that round keys are zeroed */
-        for (i = 0; i < 60; i++) {
-            if (ctx.rk[i] != 0) {
-                is_zero = 0;
-                break;
-            }
-        }
-        TEST_ASSERT(is_zero);
+        /* Check that context pointer is NULL after cleanup */
+        TEST_ASSERT(ctx.ctx == NULL);
     }
 
     test_suite_end();

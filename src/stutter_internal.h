@@ -13,6 +13,7 @@
 
 #include <stddef.h>
 #include <pthread.h>
+#include <openssl/evp.h>
 #include "../include/stutter.h"
 
 #ifdef __cplusplus
@@ -37,14 +38,11 @@ extern "C" {
 #define STUTTER_SHA256_SIZE     32
 
 /* ============================================================================
- * SHA-256
+ * SHA-256 (OpenSSL EVP wrapper)
  * ============================================================================ */
 
 typedef struct {
-    unsigned long state[8];     /* Hash state */
-    unsigned long count[2];     /* Bit count (low, high) */
-    unsigned char buffer[64];   /* Input buffer */
-    size_t buf_len;             /* Bytes in buffer */
+    EVP_MD_CTX *ctx;            /* OpenSSL message digest context */
 } sha256_ctx_t;
 
 void sha256_init(sha256_ctx_t *ctx);
@@ -53,11 +51,11 @@ void sha256_final(sha256_ctx_t *ctx, unsigned char digest[32]);
 void sha256(const void *data, size_t len, unsigned char digest[32]);
 
 /* ============================================================================
- * AES-256
+ * AES-256 (OpenSSL EVP wrapper)
  * ============================================================================ */
 
 typedef struct {
-    unsigned long rk[60];       /* Round keys (14 rounds + 1) */
+    EVP_CIPHER_CTX *ctx;        /* OpenSSL cipher context */
 } aes256_ctx_t;
 
 void aes256_init(aes256_ctx_t *ctx, const unsigned char key[32]);

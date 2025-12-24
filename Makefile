@@ -32,11 +32,18 @@ CFLAGS += -I$(SRCDIR) -I$(INCDIR)
 endif
 
 # Linker flags
-LDFLAGS = -lpthread
+LDFLAGS = -lpthread -lcrypto
 
-# Platform-specific hardening (RELRO is Linux/BSD only, not macOS)
+# Platform-specific settings
 UNAME_S := $(shell uname -s)
-ifneq ($(UNAME_S),Darwin)
+ifeq ($(UNAME_S),Darwin)
+# macOS: OpenSSL from Homebrew (check both Intel and Apple Silicon paths)
+HOMEBREW_PREFIX := $(shell brew --prefix 2>/dev/null || echo /usr/local)
+OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null || echo $(HOMEBREW_PREFIX)/opt/openssl)
+CFLAGS += -I$(OPENSSL_PREFIX)/include
+LDFLAGS += -L$(OPENSSL_PREFIX)/lib
+else
+# Linux/BSD: enable RELRO hardening
 LDFLAGS += -Wl,-z,relro,-z,now
 endif
 
