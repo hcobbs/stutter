@@ -22,9 +22,9 @@
 static stutter_accumulator_t g_accumulator;
 static pthread_key_t g_generator_key;
 static pthread_mutex_t g_init_mutex = PTHREAD_MUTEX_INITIALIZER;
-static int g_initialized = 0;
+static volatile int g_initialized = 0;
 static int g_tls_key_created = 0;
-static int g_shutdown_complete = 0;  /* Guards TLS destructor after shutdown */
+static volatile int g_shutdown_complete = 0;  /* Guards TLS destructor after shutdown */
 
 /* ============================================================================
  * Thread-Local Generator Management
@@ -47,8 +47,8 @@ static void tls_destructor(void *ptr)
             generator_shutdown((stutter_generator_t *)tls->generator);
             /* Cannot call secure_mem_tls_free - pool is gone */
         }
-        /* Cannot call secure_mem_tls_destroy - pool is gone */
-        /* TLS struct was malloc'd, but pool pointer is invalid */
+        /* Cannot call secure_mem_tls_destroy - pool is gone, but free TLS struct */
+        free(tls);
         return;
     }
 
@@ -142,10 +142,15 @@ static stutter_tls_t *get_thread_state(void)
 
     /* Perform initial reseed */
     result = gather_and_reseed(seed);
-    if (result == STUTTER_OK) {
-        generator_reseed(gen, seed);
-        platform_secure_zero(seed, sizeof(seed));
-    } else {
+    if (result != STUTTER_OK) {
+        secure_mem_tls_free(tls, gen);
+        secure_mem_tls_destroy(tls);
+        return NULL;
+    }
+
+    result = generator_reseed(gen, seed);
+    platform_secure_zero(seed, sizeof(seed));
+    if (result != STUTTER_OK) {
         /* Failed to seed generator. This is a critical error. */
         secure_mem_tls_free(tls, gen);
         secure_mem_tls_destroy(tls);
@@ -366,8 +371,11 @@ int stutter_rand(void *buf, size_t len)
             return result;
         }
 
-        generator_reseed(gen, seed);
+        result = generator_reseed(gen, seed);
         platform_secure_zero(seed, sizeof(seed));
+        if (result != STUTTER_OK) {
+            return result;
+        }
     }
 
     return generator_read(gen, buf, len);
@@ -405,8 +413,11 @@ int stutter_reseed(void)
         return result;
     }
 
-    generator_reseed(gen, seed);
+    result = generator_reseed(gen, seed);
     platform_secure_zero(seed, sizeof(seed));
+    if (result != STUTTER_OK) {
+        return result;
+    }
 
     /* Park after reseed with fresh key */
     result = secure_mem_tls_park(tls, tls->generator);

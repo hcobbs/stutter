@@ -14,12 +14,14 @@
 
 #include "stutter_internal.h"
 #include <string.h>
+#include <limits.h>
 
 void accumulator_init(stutter_accumulator_t *acc)
 {
     int i;
 
     for (i = 0; i < STUTTER_NUM_POOLS; i++) {
+        /* Ignore return value in init; failure will be caught on first use */
         sha256_init(&acc->pools[i].hash_ctx);
         acc->pools[i].entropy_bits = 0;
         stutter_spin_init(&acc->pools[i].lock);
@@ -35,6 +37,7 @@ void accumulator_add(stutter_accumulator_t *acc, unsigned int pool,
                      const void *data, size_t len, unsigned int quality)
 {
     size_t entropy_estimate;
+    size_t max_entropy;
 
     if (pool >= STUTTER_NUM_POOLS || data == NULL || len == 0) {
         return;
@@ -45,16 +48,28 @@ void accumulator_add(stutter_accumulator_t *acc, unsigned int pool,
         quality = 8;
     }
 
-    /* Estimate entropy: quality bits per byte, capped at actual bits */
-    entropy_estimate = (len * quality);
-    if (entropy_estimate > len * 8) {
-        entropy_estimate = len * 8;
+    /*
+     * Estimate entropy: quality bits per byte, capped at actual bits.
+     * Check for overflow before multiplication.
+     */
+    if (len > SIZE_MAX / quality) {
+        entropy_estimate = SIZE_MAX;  /* Saturate on overflow */
+    } else {
+        entropy_estimate = len * quality;
+    }
+
+    /* Cap at actual data bits (len * 8) */
+    if (len <= SIZE_MAX / 8) {
+        max_entropy = len * 8;
+        if (entropy_estimate > max_entropy) {
+            entropy_estimate = max_entropy;
+        }
     }
 
     /* Lock this pool only */
     stutter_spin_lock(&acc->pools[pool].lock);
 
-    /* Add data to pool's running hash */
+    /* Add data to pool's running hash (ignore errors; best effort) */
     sha256_update(&acc->pools[pool].hash_ctx, data, len);
 
     /* Update entropy estimate (cap at reasonable maximum) */
@@ -72,6 +87,7 @@ void accumulator_add(stutter_accumulator_t *acc, unsigned int pool,
 int accumulator_get_entropy_estimate(stutter_accumulator_t *acc,
                                       unsigned int pool)
 {
+    size_t bits;
     int result;
 
     if (pool >= STUTTER_NUM_POOLS) {
@@ -79,8 +95,15 @@ int accumulator_get_entropy_estimate(stutter_accumulator_t *acc,
     }
 
     stutter_spin_lock(&acc->pools[pool].lock);
-    result = (int)acc->pools[pool].entropy_bits;
+    bits = acc->pools[pool].entropy_bits;
     stutter_spin_unlock(&acc->pools[pool].lock);
+
+    /* Prevent truncation: clamp to INT_MAX */
+    if (bits > (size_t)INT_MAX) {
+        result = INT_MAX;
+    } else {
+        result = (int)bits;
+    }
 
     return result;
 }
@@ -92,6 +115,7 @@ int accumulator_reseed(stutter_accumulator_t *acc, unsigned char seed[32])
     unsigned long mask;
     int i;
     int pools_used;
+    int result;
 
     /* Acquire reseed mutex (only one thread can reseed at a time) */
     pthread_mutex_lock(&acc->reseed_mutex);
@@ -107,11 +131,17 @@ int accumulator_reseed(stutter_accumulator_t *acc, unsigned char seed[32])
     }
     stutter_spin_unlock(&acc->pools[0].lock);
 
-    /* Increment reseed counter first */
-    acc->reseed_count++;
+    /* Increment reseed counter (saturate at max to prevent schedule repeat) */
+    if (acc->reseed_count < ULONG_MAX) {
+        acc->reseed_count++;
+    }
 
     /* Initialize seed hash */
-    sha256_init(&seed_hash);
+    result = sha256_init(&seed_hash);
+    if (result != STUTTER_OK) {
+        pthread_mutex_unlock(&acc->reseed_mutex);
+        return result;
+    }
 
     /* Collect from eligible pools based on Fortuna schedule */
     pools_used = 0;
@@ -123,10 +153,22 @@ int accumulator_reseed(stutter_accumulator_t *acc, unsigned char seed[32])
             stutter_spin_lock(&acc->pools[i].lock);
 
             /* Finalize this pool's hash and add to seed material */
-            sha256_final(&acc->pools[i].hash_ctx, pool_digest);
+            result = sha256_final(&acc->pools[i].hash_ctx, pool_digest);
+            if (result != STUTTER_OK) {
+                stutter_spin_unlock(&acc->pools[i].lock);
+                platform_secure_zero(pool_digest, sizeof(pool_digest));
+                pthread_mutex_unlock(&acc->reseed_mutex);
+                return result;
+            }
 
             /* Add pool digest to seed hash */
-            sha256_update(&seed_hash, pool_digest, 32);
+            result = sha256_update(&seed_hash, pool_digest, 32);
+            if (result != STUTTER_OK) {
+                stutter_spin_unlock(&acc->pools[i].lock);
+                platform_secure_zero(pool_digest, sizeof(pool_digest));
+                pthread_mutex_unlock(&acc->reseed_mutex);
+                return result;
+            }
 
             /* Re-initialize pool for next accumulation cycle */
             sha256_init(&acc->pools[i].hash_ctx);
@@ -138,7 +180,12 @@ int accumulator_reseed(stutter_accumulator_t *acc, unsigned char seed[32])
     }
 
     /* Finalize seed */
-    sha256_final(&seed_hash, seed);
+    result = sha256_final(&seed_hash, seed);
+    if (result != STUTTER_OK) {
+        platform_secure_zero(pool_digest, sizeof(pool_digest));
+        pthread_mutex_unlock(&acc->reseed_mutex);
+        return result;
+    }
 
     /* Zero intermediate values */
     platform_secure_zero(pool_digest, sizeof(pool_digest));

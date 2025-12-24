@@ -23,26 +23,18 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-
-/*
- * Function pointer used to prevent compiler from optimizing away memset.
- * Declared volatile so the compiler cannot assume its value.
- */
-static void * (* volatile secure_memset_ptr)(void *, int, size_t) = memset;
+#include <openssl/crypto.h>
 
 /*
  * Secure memory zeroing.
  *
- * Uses a volatile function pointer to call memset, which prevents
- * the compiler from optimizing away the call since it cannot prove
- * what function will be called at runtime.
- *
- * This technique is recommended by the SEI CERT C Coding Standard
- * (MSC06-C) as a portable way to ensure sensitive data is cleared.
+ * Uses OpenSSL's OPENSSL_cleanse() which is guaranteed not to be
+ * optimized away by the compiler. This is the most reliable method
+ * since OpenSSL uses platform-specific barriers and techniques.
  */
 void platform_secure_zero(void *buf, size_t len)
 {
-    secure_memset_ptr(buf, 0, len);
+    OPENSSL_cleanse(buf, len);
 }
 
 /*

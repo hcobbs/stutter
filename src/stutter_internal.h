@@ -45,10 +45,10 @@ typedef struct {
     EVP_MD_CTX *ctx;            /* OpenSSL message digest context */
 } sha256_ctx_t;
 
-void sha256_init(sha256_ctx_t *ctx);
-void sha256_update(sha256_ctx_t *ctx, const void *data, size_t len);
-void sha256_final(sha256_ctx_t *ctx, unsigned char digest[32]);
-void sha256(const void *data, size_t len, unsigned char digest[32]);
+int sha256_init(sha256_ctx_t *ctx);
+int sha256_update(sha256_ctx_t *ctx, const void *data, size_t len);
+int sha256_final(sha256_ctx_t *ctx, unsigned char digest[32]);
+int sha256(const void *data, size_t len, unsigned char digest[32]);
 
 /* ============================================================================
  * AES-256 (OpenSSL EVP wrapper)
@@ -58,10 +58,10 @@ typedef struct {
     EVP_CIPHER_CTX *ctx;        /* OpenSSL cipher context */
 } aes256_ctx_t;
 
-void aes256_init(aes256_ctx_t *ctx, const unsigned char key[32]);
-void aes256_encrypt(const aes256_ctx_t *ctx,
-                    const unsigned char in[16],
-                    unsigned char out[16]);
+int aes256_init(aes256_ctx_t *ctx, const unsigned char key[32]);
+int aes256_encrypt(const aes256_ctx_t *ctx,
+                   const unsigned char in[16],
+                   unsigned char out[16]);
 void aes256_done(aes256_ctx_t *ctx);
 
 /* ============================================================================
@@ -77,7 +77,7 @@ typedef struct {
 } stutter_generator_t;
 
 void generator_init(stutter_generator_t *gen);
-void generator_reseed(stutter_generator_t *gen, const unsigned char seed[32]);
+int  generator_reseed(stutter_generator_t *gen, const unsigned char seed[32]);
 int  generator_read(stutter_generator_t *gen, void *buf, size_t len);
 void generator_shutdown(stutter_generator_t *gen);
 
