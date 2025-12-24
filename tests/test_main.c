@@ -19,6 +19,7 @@ extern void test_aes256(void);
 extern void test_generator(void);
 extern void test_accumulator(void);
 extern void test_thread(void);
+extern void test_security(void);
 
 /* Global test counters */
 static int g_tests_run = 0;
@@ -93,6 +94,7 @@ int main(int argc, char *argv[])
         test_aes256();
         test_accumulator();
         test_generator();
+        test_security();
         test_thread();
     }
 

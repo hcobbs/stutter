@@ -19,13 +19,26 @@ RANLIB = ranlib
 CFLAGS = -Wall -Wextra -std=c89 -pedantic -O2 -fPIC
 CFLAGS += -I$(SRCDIR) -I$(INCDIR)
 
+# Security hardening flags
+CFLAGS += -fstack-protector-strong
+# Note: _FORTIFY_SOURCE requires optimization (-O1 or higher)
+CFLAGS += -D_FORTIFY_SOURCE=2
+
 # Debug build: make DEBUG=1
 ifdef DEBUG
-CFLAGS += -g -O0 -DSTUTTER_DEBUG
+# Remove optimization-dependent hardening for debug builds
+CFLAGS = -Wall -Wextra -std=c89 -pedantic -g -O0 -fPIC -DSTUTTER_DEBUG
+CFLAGS += -I$(SRCDIR) -I$(INCDIR)
 endif
 
 # Linker flags
 LDFLAGS = -lpthread
+
+# Platform-specific hardening (RELRO is Linux/BSD only, not macOS)
+UNAME_S := $(shell uname -s)
+ifneq ($(UNAME_S),Darwin)
+LDFLAGS += -Wl,-z,relro,-z,now
+endif
 
 # Directories
 SRCDIR = src
@@ -63,6 +76,7 @@ TEST_SOURCES = \
 	$(TESTDIR)/test_aes256.c \
 	$(TESTDIR)/test_generator.c \
 	$(TESTDIR)/test_accumulator.c \
+	$(TESTDIR)/test_security.c \
 	$(TESTDIR)/test_thread.c
 
 TEST_BIN = $(BINDIR)/test_stutter

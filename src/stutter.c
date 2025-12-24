@@ -177,10 +177,10 @@ void stutter_shutdown(void)
 
     STUTTER_LOG("Shutting down Stutter CSPRNG...");
 
-    /* Note: Thread-local generators are cleaned up by their destructors
-     * when threads exit or when the TLS key is deleted.
-     * We cannot safely iterate all thread generators here.
-     * Main thread's generator will be cleaned up below if it exists.
+    /*
+     * Clean up calling thread's generator first (before key deletion).
+     * We do this explicitly because pthread_key_delete doesn't call
+     * destructors for the calling thread.
      */
     {
         stutter_generator_t *gen;
@@ -191,6 +191,32 @@ void stutter_shutdown(void)
             free(gen);
             pthread_setspecific(g_generator_key, NULL);
         }
+    }
+
+    /*
+     * Delete the TLS key. This triggers the destructor for any remaining
+     * thread-local generators (except the calling thread which we just
+     * cleaned up manually above).
+     *
+     * Note: pthread_key_delete does NOT call destructors for existing
+     * thread-specific values. However, when threads exit, their
+     * destructors will no longer be called for this key. This means
+     * we rely on the application ensuring threads have exited or
+     * will exit cleanly before shutdown.
+     *
+     * For maximum security, applications should ensure all threads
+     * using stutter have terminated before calling stutter_shutdown().
+     */
+    pthread_key_delete(g_generator_key);
+
+    /*
+     * Reset pthread_once control to allow re-initialization.
+     * This is necessary for applications that may call stutter_init()
+     * again after shutdown (e.g., in test suites).
+     */
+    {
+        pthread_once_t reset = PTHREAD_ONCE_INIT;
+        g_tls_init_once = reset;
     }
 
     entropy_shutdown();
