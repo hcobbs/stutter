@@ -300,16 +300,17 @@ int entropy_gather(stutter_accumulator_t *acc, size_t min_bits)
      * Gather from all sources until we have enough entropy.
      * Keep cycling through sources until min_bits is reached.
      *
-     * SECURITY: We snapshot source_count at each outer loop iteration
-     * to avoid TOCTOU issues. The accumulator_add call is made while
-     * holding the mutex to prevent races with source unregistration.
+     * THREAD SAFETY: The mutex is held for the entire gather operation
+     * (acquired at line 290). This prevents source registration/unregistration
+     * during gathering. The snapshot and bounds check are defensive measures
+     * that are currently unreachable due to mutex protection.
      */
     while (total_bits < min_bits) {
         source_count_snapshot = g_source_count;
         for (i = 0; i < source_count_snapshot && total_bits < min_bits; i++) {
             stutter_entropy_source_t *src;
 
-            /* Re-check bounds in case sources were removed */
+            /* Defensive bounds check (unreachable while mutex is held) */
             if (i >= g_source_count) {
                 break;
             }

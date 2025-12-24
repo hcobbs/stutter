@@ -24,6 +24,7 @@ static pthread_key_t g_generator_key;
 static pthread_mutex_t g_init_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int g_initialized = 0;
 static int g_tls_key_created = 0;
+static int g_shutdown_complete = 0;  /* Guards TLS destructor after shutdown */
 
 /* ============================================================================
  * Thread-Local Generator Management
@@ -32,19 +33,36 @@ static int g_tls_key_created = 0;
 static void tls_destructor(void *ptr)
 {
     stutter_tls_t *tls = (stutter_tls_t *)ptr;
-    if (tls != NULL) {
-        if (tls->generator != NULL) {
-            stutter_generator_t *gen = (stutter_generator_t *)tls->generator;
-            /* Unpark if parked before shutdown */
-            if (tls->parked) {
-                secure_mem_tls_unpark(tls, gen);
-                tls->parked = 0;
-            }
-            generator_shutdown(gen);
-            secure_mem_tls_free(tls, gen);
-        }
-        secure_mem_tls_destroy(tls);
+    if (tls == NULL) {
+        return;
     }
+
+    /*
+     * If global shutdown has completed, RAMPart pools are gone.
+     * We can only do minimal cleanup (secure wipe via generator_shutdown).
+     * The TLS struct itself was heap-allocated so we still free it.
+     */
+    if (g_shutdown_complete) {
+        if (tls->generator != NULL) {
+            generator_shutdown((stutter_generator_t *)tls->generator);
+            /* Cannot call secure_mem_tls_free - pool is gone */
+        }
+        /* Cannot call secure_mem_tls_destroy - pool is gone */
+        /* TLS struct was malloc'd, but pool pointer is invalid */
+        return;
+    }
+
+    if (tls->generator != NULL) {
+        stutter_generator_t *gen = (stutter_generator_t *)tls->generator;
+        /* Unpark if parked before cleanup */
+        if (tls->parked) {
+            secure_mem_tls_unpark(tls, gen);
+            tls->parked = 0;
+        }
+        generator_shutdown(gen);
+        secure_mem_tls_free(tls, gen);
+    }
+    secure_mem_tls_destroy(tls);
 }
 
 /*
@@ -158,6 +176,9 @@ int stutter_init(void)
     }
 
     STUTTER_LOG("Initializing Stutter CSPRNG...");
+
+    /* Reset shutdown flag for re-initialization */
+    g_shutdown_complete = 0;
 
     /* Initialize secure memory (RAMPart global pool) */
     result = secure_mem_init();
@@ -282,6 +303,11 @@ void stutter_shutdown(void)
     accumulator_shutdown(&g_accumulator);
     secure_mem_shutdown();
 
+    /*
+     * Mark shutdown complete BEFORE releasing mutex.
+     * This prevents TLS destructors from accessing freed RAMPart pools.
+     */
+    g_shutdown_complete = 1;
     g_initialized = 0;
 
     pthread_mutex_unlock(&g_init_mutex);
@@ -342,22 +368,6 @@ int stutter_rand(void *buf, size_t len)
 
         generator_reseed(gen, seed);
         platform_secure_zero(seed, sizeof(seed));
-
-        /* Auto-park after reseed (quota exhausted triggers fresh key) */
-        result = secure_mem_tls_park(tls, tls->generator);
-        if (result == STUTTER_OK) {
-            tls->parked = 1;
-            STUTTER_LOG("Generator auto-parked after reseed");
-        }
-    }
-
-    /* Unpark again if we just parked (need to use the generator now) */
-    if (tls->parked) {
-        result = secure_mem_tls_unpark(tls, tls->generator);
-        if (result != STUTTER_OK) {
-            return result;
-        }
-        tls->parked = 0;
     }
 
     return generator_read(gen, buf, len);
@@ -403,6 +413,8 @@ int stutter_reseed(void)
     if (result == STUTTER_OK) {
         tls->parked = 1;
         STUTTER_LOG("Generator parked after manual reseed");
+    } else {
+        STUTTER_LOG("WARNING: Failed to park generator after reseed (error %d)", result);
     }
 
     return STUTTER_OK;
