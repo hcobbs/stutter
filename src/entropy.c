@@ -168,6 +168,8 @@ int entropy_init(void)
 int entropy_register(const stutter_entropy_source_t *source)
 {
     stutter_entropy_source_t *copy;
+    char *name_copy;
+    size_t name_len;
     int result;
 
     if (source == NULL || source->name == NULL || source->read == NULL) {
@@ -188,7 +190,18 @@ int entropy_register(const stutter_entropy_source_t *source)
         return STUTTER_ERR_MEMORY;
     }
 
+    /* Copy the name string (strdup equivalent for C89) */
+    name_len = strlen(source->name);
+    name_copy = (char *)malloc(name_len + 1);
+    if (name_copy == NULL) {
+        free(copy);
+        pthread_mutex_unlock(&g_entropy_mutex);
+        return STUTTER_ERR_MEMORY;
+    }
+    memcpy(name_copy, source->name, name_len + 1);
+
     memcpy(copy, source, sizeof(*copy));
+    copy->name = name_copy;
     copy->call_count = 0;
 
     /* Initialize source if needed */
@@ -241,6 +254,8 @@ int entropy_unregister(const char *name)
         g_sources[found]->shutdown(g_sources[found]->ctx);
     }
 
+    /* Free the copied name string */
+    free((void *)g_sources[found]->name);
     free(g_sources[found]);
 
     /* Shift remaining sources down */
@@ -258,12 +273,14 @@ int entropy_unregister(const char *name)
 
 int entropy_gather(stutter_accumulator_t *acc, size_t min_bits)
 {
-    unsigned char buf[64];
+    unsigned char buf[STUTTER_ENTROPY_BUF_SIZE];
     size_t actual;
     size_t total_bits;
     unsigned int pool;
+    unsigned int quality;
     int i;
     int result;
+    int source_count_snapshot;
 
     if (acc == NULL) {
         return STUTTER_ERR_INVALID;
@@ -281,10 +298,21 @@ int entropy_gather(stutter_accumulator_t *acc, size_t min_bits)
     /*
      * Gather from all sources until we have enough entropy.
      * Keep cycling through sources until min_bits is reached.
+     *
+     * SECURITY: We snapshot source_count at each outer loop iteration
+     * to avoid TOCTOU issues. The accumulator_add call is made while
+     * holding the mutex to prevent races with source unregistration.
      */
     while (total_bits < min_bits) {
-        for (i = 0; i < g_source_count && total_bits < min_bits; i++) {
-            stutter_entropy_source_t *src = g_sources[i];
+        source_count_snapshot = g_source_count;
+        for (i = 0; i < source_count_snapshot && total_bits < min_bits; i++) {
+            stutter_entropy_source_t *src;
+
+            /* Re-check bounds in case sources were removed */
+            if (i >= g_source_count) {
+                break;
+            }
+            src = g_sources[i];
 
             /* Read entropy from source */
             result = src->read(src->ctx, buf, sizeof(buf), &actual);
@@ -306,13 +334,16 @@ int entropy_gather(stutter_accumulator_t *acc, size_t min_bits)
             }
 
             src->call_count++;
+            quality = src->quality;
 
-            /* Add to accumulator (release mutex briefly) */
-            pthread_mutex_unlock(&g_entropy_mutex);
-            accumulator_add(acc, pool, buf, actual, src->quality);
-            pthread_mutex_lock(&g_entropy_mutex);
+            /*
+             * Add to accumulator while holding mutex.
+             * This is safe because accumulator_add only acquires
+             * per-pool spinlocks, not the entropy mutex.
+             */
+            accumulator_add(acc, pool, buf, actual, quality);
 
-            total_bits += actual * src->quality;
+            total_bits += actual * quality;
         }
 
         /* Avoid infinite loop if no sources are producing */
@@ -345,6 +376,8 @@ void entropy_shutdown(void)
         if (g_sources[i]->shutdown != NULL) {
             g_sources[i]->shutdown(g_sources[i]->ctx);
         }
+        /* Free the copied name string */
+        free((void *)g_sources[i]->name);
         free(g_sources[i]);
         g_sources[i] = NULL;
     }
