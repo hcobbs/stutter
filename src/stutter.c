@@ -20,9 +20,9 @@
 
 static stutter_accumulator_t g_accumulator;
 static pthread_key_t g_generator_key;
-static pthread_once_t g_tls_init_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t g_init_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int g_initialized = 0;
+static int g_tls_key_created = 0;
 
 /* ============================================================================
  * Thread-Local Generator Management
@@ -38,9 +38,50 @@ static void generator_destructor(void *ptr)
     }
 }
 
-static void tls_init(void)
+/*
+ * Initialize TLS key for thread-local generators.
+ * Returns STUTTER_OK on success or if already initialized.
+ */
+static int tls_init(void)
 {
-    pthread_key_create(&g_generator_key, generator_destructor);
+    if (g_tls_key_created) {
+        return STUTTER_OK;
+    }
+
+    if (pthread_key_create(&g_generator_key, generator_destructor) != 0) {
+        return STUTTER_ERR_PLATFORM;
+    }
+
+    g_tls_key_created = 1;
+    return STUTTER_OK;
+}
+
+/*
+ * Gather entropy and reseed the accumulator.
+ * Tries up to STUTTER_RESEED_ATTEMPTS times to gather enough entropy.
+ * On success, writes the 32-byte seed to the provided buffer.
+ *
+ * Returns: STUTTER_OK on success, error code on failure.
+ */
+static int gather_and_reseed(unsigned char seed[32])
+{
+    unsigned char entropy_buf[STUTTER_ENTROPY_BUF_SIZE];
+    int result;
+    int attempts;
+
+    result = STUTTER_ERR_NO_ENTROPY;
+    for (attempts = 0;
+         attempts < STUTTER_RESEED_ATTEMPTS && result == STUTTER_ERR_NO_ENTROPY;
+         attempts++) {
+        if (platform_get_entropy(entropy_buf, sizeof(entropy_buf)) == STUTTER_OK) {
+            accumulator_add(&g_accumulator, 0, entropy_buf,
+                            sizeof(entropy_buf), 8);
+        }
+        result = accumulator_reseed(&g_accumulator, seed);
+    }
+
+    platform_secure_zero(entropy_buf, sizeof(entropy_buf));
+    return result;
 }
 
 static stutter_generator_t *get_thread_generator(void)
@@ -48,7 +89,6 @@ static stutter_generator_t *get_thread_generator(void)
     stutter_generator_t *gen;
     unsigned char seed[32];
     int result;
-    int attempts;
 
     gen = (stutter_generator_t *)pthread_getspecific(g_generator_key);
     if (gen != NULL) {
@@ -63,24 +103,8 @@ static stutter_generator_t *get_thread_generator(void)
 
     generator_init(gen);
 
-    /*
-     * Perform initial reseed. We need pool 0 to have enough entropy.
-     * Gather entropy directly into pool 0 to ensure it gets sufficient bits.
-     */
-    result = STUTTER_ERR_NO_ENTROPY;
-    for (attempts = 0; attempts < 10 && result == STUTTER_ERR_NO_ENTROPY; attempts++) {
-        unsigned char entropy_buf[64];
-
-        /* Gather entropy directly from system and add to pool 0 */
-        if (platform_get_entropy(entropy_buf, sizeof(entropy_buf)) == STUTTER_OK) {
-            accumulator_add(&g_accumulator, 0, entropy_buf,
-                            sizeof(entropy_buf), 8);
-            platform_secure_zero(entropy_buf, sizeof(entropy_buf));
-        }
-
-        result = accumulator_reseed(&g_accumulator, seed);
-    }
-
+    /* Perform initial reseed */
+    result = gather_and_reseed(seed);
     if (result == STUTTER_OK) {
         generator_reseed(gen, seed);
         platform_secure_zero(seed, sizeof(seed));
@@ -116,7 +140,12 @@ int stutter_init(void)
     STUTTER_LOG("Initializing Stutter CSPRNG...");
 
     /* Initialize TLS key */
-    pthread_once(&g_tls_init_once, tls_init);
+    result = tls_init();
+    if (result != STUTTER_OK) {
+        pthread_mutex_unlock(&g_init_mutex);
+        STUTTER_LOG("Failed to create TLS key");
+        return result;
+    }
 
     /* Initialize accumulator */
     accumulator_init(&g_accumulator);
@@ -205,18 +234,11 @@ void stutter_shutdown(void)
     }
 
     /*
-     * Reset pthread_once control to allow re-initialization.
-     * This is necessary for applications that may call stutter_init()
-     * again after shutdown (e.g., in test suites).
-     *
-     * Note: The TLS key remains valid. Re-initialization will create
-     * a new key via pthread_once, but the old key's destructor will
-     * still be called for any threads that exit.
+     * Note: We do NOT reset g_tls_key_created or destroy the TLS key.
+     * The key remains valid so threads that exit after shutdown still
+     * have their destructor called. Re-initialization via stutter_init()
+     * will reuse the existing key, which is safe.
      */
-    {
-        pthread_once_t reset = PTHREAD_ONCE_INIT;
-        g_tls_init_once = reset;
-    }
 
     entropy_shutdown();
     accumulator_shutdown(&g_accumulator);
@@ -261,22 +283,7 @@ int stutter_rand(void *buf, size_t len)
 
     /* Check if generator needs reseed */
     if (gen->bytes_remaining == 0) {
-        int attempts;
-        unsigned char entropy_buf[64];
-
-        /*
-         * Gather more entropy and reseed. Add directly to pool 0.
-         */
-        result = STUTTER_ERR_NO_ENTROPY;
-        for (attempts = 0; attempts < 10 && result == STUTTER_ERR_NO_ENTROPY; attempts++) {
-            if (platform_get_entropy(entropy_buf, sizeof(entropy_buf)) == STUTTER_OK) {
-                accumulator_add(&g_accumulator, 0, entropy_buf,
-                                sizeof(entropy_buf), 8);
-            }
-            result = accumulator_reseed(&g_accumulator, seed);
-        }
-        platform_secure_zero(entropy_buf, sizeof(entropy_buf));
-
+        result = gather_and_reseed(seed);
         if (result != STUTTER_OK) {
             return result;
         }
@@ -303,24 +310,9 @@ int stutter_reseed(void)
         return STUTTER_ERR_MEMORY;
     }
 
-    /* Force entropy gathering directly into pool 0 */
-    {
-        unsigned char entropy_buf[64];
-        int attempts;
-
-        result = STUTTER_ERR_NO_ENTROPY;
-        for (attempts = 0; attempts < 10 && result == STUTTER_ERR_NO_ENTROPY; attempts++) {
-            if (platform_get_entropy(entropy_buf, sizeof(entropy_buf)) == STUTTER_OK) {
-                accumulator_add(&g_accumulator, 0, entropy_buf,
-                                sizeof(entropy_buf), 8);
-            }
-            result = accumulator_reseed(&g_accumulator, seed);
-        }
-        platform_secure_zero(entropy_buf, sizeof(entropy_buf));
-
-        if (result != STUTTER_OK) {
-            return result;
-        }
+    result = gather_and_reseed(seed);
+    if (result != STUTTER_OK) {
+        return result;
     }
 
     generator_reseed(gen, seed);

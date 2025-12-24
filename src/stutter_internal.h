@@ -29,6 +29,8 @@ extern "C" {
 #define STUTTER_GENERATOR_QUOTA 65536   /* Bytes before forced reseed */
 #define STUTTER_MAX_REQUEST     1048576 /* Max bytes per request (1MB) */
 #define STUTTER_MAX_SOURCES     16      /* Max registered entropy sources */
+#define STUTTER_RESEED_ATTEMPTS 10      /* Max attempts to gather entropy for reseed */
+#define STUTTER_ENTROPY_BUF_SIZE 64     /* Bytes to gather per entropy attempt */
 
 #define STUTTER_AES_BLOCK_SIZE  16
 #define STUTTER_AES_KEY_SIZE    32
