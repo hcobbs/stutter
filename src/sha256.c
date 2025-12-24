@@ -193,7 +193,7 @@ void sha256_final(sha256_ctx_t *ctx, unsigned char digest[32])
     }
 
     /* Zero sensitive state */
-    memset(ctx, 0, sizeof(*ctx));
+    platform_secure_zero(ctx, sizeof(*ctx));
 }
 
 void sha256(const void *data, size_t len, unsigned char digest[32])

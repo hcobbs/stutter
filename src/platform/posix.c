@@ -25,15 +25,24 @@
 #include <sys/stat.h>
 
 /*
+ * Function pointer used to prevent compiler from optimizing away memset.
+ * Declared volatile so the compiler cannot assume its value.
+ */
+static void * (* volatile secure_memset_ptr)(void *, int, size_t) = memset;
+
+/*
  * Secure memory zeroing.
- * Must not be optimized away by the compiler.
+ *
+ * Uses a volatile function pointer to call memset, which prevents
+ * the compiler from optimizing away the call since it cannot prove
+ * what function will be called at runtime.
+ *
+ * This technique is recommended by the SEI CERT C Coding Standard
+ * (MSC06-C) as a portable way to ensure sensitive data is cleared.
  */
 void platform_secure_zero(void *buf, size_t len)
 {
-    volatile unsigned char *p = (volatile unsigned char *)buf;
-    while (len--) {
-        *p++ = 0;
-    }
+    secure_memset_ptr(buf, 0, len);
 }
 
 /*

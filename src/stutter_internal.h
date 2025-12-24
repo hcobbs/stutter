@@ -70,6 +70,7 @@ void aes256_done(aes256_ctx_t *ctx);
 
 typedef struct {
     aes256_ctx_t aes;                           /* Expanded AES key */
+    unsigned char key[STUTTER_AES_KEY_SIZE];    /* Current key (for reseed mixing) */
     unsigned char counter[STUTTER_AES_BLOCK_SIZE]; /* 128-bit counter */
     size_t bytes_remaining;                     /* Quota until reseed */
     int seeded;                                 /* Has been seeded */

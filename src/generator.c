@@ -10,6 +10,11 @@
  * Implements the Fortuna generator using AES-256 in counter mode.
  * After each generation, the key is rotated using generated output
  * to provide backtrack resistance.
+ *
+ * SECURITY:
+ * - Forward secrecy: reseed mixes old_key || seed via SHA-256
+ * - Backtrack resistance: key is rotated after every read operation
+ * - Counter never resets: ensures (key, counter) pair is never reused
  */
 
 #include "stutter_internal.h"
@@ -46,10 +51,7 @@ void generator_reseed(stutter_generator_t *gen, const unsigned char seed[32])
          * This ensures forward secrecy: knowing seed alone is insufficient.
          */
         sha256_init(&ctx);
-
-        /* Extract current key from AES context (first 32 bytes of round keys) */
-        /* Actually, we should track the key separately. For now, just use seed. */
-        /* TODO: Track original key for proper mixing */
+        sha256_update(&ctx, gen->key, 32);
         sha256_update(&ctx, seed, 32);
         sha256_final(&ctx, new_key);
     } else {
@@ -57,11 +59,24 @@ void generator_reseed(stutter_generator_t *gen, const unsigned char seed[32])
         memcpy(new_key, seed, 32);
     }
 
+    /* Store new key for future reseed mixing */
+    memcpy(gen->key, new_key, 32);
+
     /* Initialize AES with new key */
     aes256_init(&gen->aes, new_key);
 
-    /* Reset counter to zero */
-    memset(gen->counter, 0, sizeof(gen->counter));
+    /*
+     * SECURITY: Do NOT reset counter here.
+     * The counter is a monotonically increasing value that ensures
+     * a (key, counter) pair is never reused even if the same seed
+     * is accidentally provided twice. Counter overflow after 2^128
+     * blocks is astronomically unlikely.
+     *
+     * Only initialize counter on first seed when it's guaranteed zero.
+     */
+    if (!gen->seeded) {
+        memset(gen->counter, 0, sizeof(gen->counter));
+    }
 
     /* Reset quota */
     gen->bytes_remaining = STUTTER_GENERATOR_QUOTA;
@@ -131,12 +146,17 @@ int generator_read(stutter_generator_t *gen, void *buf, size_t len)
     aes256_encrypt(&gen->aes, gen->counter, new_key + 16);
     increment_counter(gen->counter);
 
-    /* Re-initialize with new key */
+    /* Update stored key for future reseed mixing */
+    memcpy(gen->key, new_key, 32);
+
+    /* Re-initialize AES with new key */
     aes256_done(&gen->aes);
     aes256_init(&gen->aes, new_key);
 
-    /* Zero counter (optional: could keep it, but zeroing is safer) */
-    memset(gen->counter, 0, sizeof(gen->counter));
+    /*
+     * SECURITY: Do NOT reset counter here.
+     * Counter continues incrementing to ensure (key, counter) uniqueness.
+     */
 
     /* Zero sensitive values */
     platform_secure_zero(block, sizeof(block));
@@ -148,6 +168,7 @@ int generator_read(stutter_generator_t *gen, void *buf, size_t len)
 void generator_shutdown(stutter_generator_t *gen)
 {
     aes256_done(&gen->aes);
+    platform_secure_zero(gen->key, sizeof(gen->key));
     platform_secure_zero(gen->counter, sizeof(gen->counter));
     gen->seeded = 0;
     gen->bytes_remaining = 0;
