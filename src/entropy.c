@@ -12,8 +12,8 @@
  */
 
 #include "stutter_internal.h"
+#include "secure_mem.h"
 #include <string.h>
-#include <stdlib.h>
 
 /* Registered entropy sources */
 static stutter_entropy_source_t *g_sources[STUTTER_MAX_SOURCES];
@@ -183,18 +183,18 @@ int entropy_register(const stutter_entropy_source_t *source)
         return STUTTER_ERR_INVALID;
     }
 
-    /* Allocate copy of source descriptor */
-    copy = (stutter_entropy_source_t *)malloc(sizeof(*copy));
+    /* Allocate copy of source descriptor from secure memory */
+    copy = (stutter_entropy_source_t *)secure_mem_alloc(sizeof(*copy));
     if (copy == NULL) {
         pthread_mutex_unlock(&g_entropy_mutex);
         return STUTTER_ERR_MEMORY;
     }
 
-    /* Copy the name string (strdup equivalent for C89) */
+    /* Copy the name string from secure memory */
     name_len = strlen(source->name);
-    name_copy = (char *)malloc(name_len + 1);
+    name_copy = (char *)secure_mem_alloc(name_len + 1);
     if (name_copy == NULL) {
-        free(copy);
+        secure_mem_free(copy);
         pthread_mutex_unlock(&g_entropy_mutex);
         return STUTTER_ERR_MEMORY;
     }
@@ -208,7 +208,8 @@ int entropy_register(const stutter_entropy_source_t *source)
     if (copy->init != NULL) {
         result = copy->init(copy->ctx);
         if (result != STUTTER_OK) {
-            free(copy);
+            secure_mem_free((void *)copy->name);
+            secure_mem_free(copy);
             pthread_mutex_unlock(&g_entropy_mutex);
             return result;
         }
@@ -254,9 +255,9 @@ int entropy_unregister(const char *name)
         g_sources[found]->shutdown(g_sources[found]->ctx);
     }
 
-    /* Free the copied name string */
-    free((void *)g_sources[found]->name);
-    free(g_sources[found]);
+    /* Free the copied name string from secure memory */
+    secure_mem_free((void *)g_sources[found]->name);
+    secure_mem_free(g_sources[found]);
 
     /* Shift remaining sources down */
     for (i = found; i < g_source_count - 1; i++) {
@@ -376,9 +377,9 @@ void entropy_shutdown(void)
         if (g_sources[i]->shutdown != NULL) {
             g_sources[i]->shutdown(g_sources[i]->ctx);
         }
-        /* Free the copied name string */
-        free((void *)g_sources[i]->name);
-        free(g_sources[i]);
+        /* Free from secure memory */
+        secure_mem_free((void *)g_sources[i]->name);
+        secure_mem_free(g_sources[i]);
         g_sources[i] = NULL;
     }
 

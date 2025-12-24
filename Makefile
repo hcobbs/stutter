@@ -31,8 +31,12 @@ CFLAGS = -Wall -Wextra -std=c89 -pedantic -g -O0 -fPIC -DSTUTTER_DEBUG
 CFLAGS += -I$(SRCDIR) -I$(INCDIR)
 endif
 
+# RAMPart dependency
+RAMPART_DIR ?= ../RAMpart
+CFLAGS += -I$(RAMPART_DIR)/h
+
 # Linker flags
-LDFLAGS = -lpthread -lcrypto
+LDFLAGS = -lpthread -lcrypto -L$(RAMPART_DIR)/lib -lrampart
 
 # Platform-specific settings
 UNAME_S := $(shell uname -s)
@@ -66,6 +70,7 @@ SOURCES = \
 	$(SRCDIR)/accumulator.c \
 	$(SRCDIR)/generator.c \
 	$(SRCDIR)/entropy.c \
+	$(SRCDIR)/secure_mem.c \
 	$(SRCDIR)/stutter.c \
 	$(SRCDIR)/platform/posix.c
 
@@ -170,5 +175,6 @@ $(OBJDIR)/aes256.o: $(SRCDIR)/aes256.c $(SRCDIR)/stutter_internal.h
 $(OBJDIR)/accumulator.o: $(SRCDIR)/accumulator.c $(SRCDIR)/stutter_internal.h
 $(OBJDIR)/generator.o: $(SRCDIR)/generator.c $(SRCDIR)/stutter_internal.h
 $(OBJDIR)/entropy.o: $(SRCDIR)/entropy.c $(SRCDIR)/stutter_internal.h
-$(OBJDIR)/stutter.o: $(SRCDIR)/stutter.c $(SRCDIR)/stutter_internal.h $(INCDIR)/stutter.h
+$(OBJDIR)/secure_mem.o: $(SRCDIR)/secure_mem.c $(SRCDIR)/secure_mem.h $(SRCDIR)/stutter_internal.h
+$(OBJDIR)/stutter.o: $(SRCDIR)/stutter.c $(SRCDIR)/stutter_internal.h $(SRCDIR)/secure_mem.h $(INCDIR)/stutter.h
 $(OBJDIR)/platform/posix.o: $(SRCDIR)/platform/posix.c $(SRCDIR)/stutter_internal.h
