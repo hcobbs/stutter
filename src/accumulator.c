@@ -43,8 +43,10 @@ void accumulator_add(stutter_accumulator_t *acc, unsigned int pool,
         return;
     }
 
-    /* Clamp quality to valid range */
-    if (quality > 8) {
+    /* Clamp quality to valid range (1-8 bits per byte) */
+    if (quality == 0) {
+        quality = 1;
+    } else if (quality > 8) {
         quality = 8;
     }
 
@@ -58,12 +60,17 @@ void accumulator_add(stutter_accumulator_t *acc, unsigned int pool,
         entropy_estimate = len * quality;
     }
 
-    /* Cap at actual data bits (len * 8) */
-    if (len <= SIZE_MAX / 8) {
+    /*
+     * Cap at actual data bits (len * 8).
+     * If len is so large that len*8 would overflow, use SIZE_MAX as cap.
+     */
+    if (len > SIZE_MAX / 8) {
+        max_entropy = SIZE_MAX;
+    } else {
         max_entropy = len * 8;
-        if (entropy_estimate > max_entropy) {
-            entropy_estimate = max_entropy;
-        }
+    }
+    if (entropy_estimate > max_entropy) {
+        entropy_estimate = max_entropy;
     }
 
     /* Lock this pool only */

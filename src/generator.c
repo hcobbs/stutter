@@ -189,6 +189,12 @@ int generator_read(stutter_generator_t *gen, void *buf, size_t len)
     aes256_done(&gen->aes);
     result = aes256_init(&gen->aes, new_key);
     if (result != STUTTER_OK) {
+        /*
+         * Key rotation failed. Mark generator as unseeded to prevent
+         * subsequent calls from using a NULL AES context.
+         */
+        gen->seeded = 0;
+        platform_secure_zero(gen->key, sizeof(gen->key));
         platform_secure_zero(block, sizeof(block));
         platform_secure_zero(new_key, sizeof(new_key));
         return result;

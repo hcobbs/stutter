@@ -304,16 +304,22 @@ void stutter_shutdown(void)
      * will reuse the existing key, which is safe.
      */
 
+    /*
+     * Mark library as uninitialized BEFORE destroying resources.
+     * This prevents new requests from starting while cleanup is in progress.
+     * Combined with g_shutdown_complete, this closes the race window.
+     */
+    g_initialized = 0;
+
     entropy_shutdown();
     accumulator_shutdown(&g_accumulator);
     secure_mem_shutdown();
 
     /*
-     * Mark shutdown complete BEFORE releasing mutex.
-     * This prevents TLS destructors from accessing freed RAMPart pools.
+     * Mark shutdown complete AFTER destroying resources.
+     * TLS destructors check this flag to know if RAMPart pools are gone.
      */
     g_shutdown_complete = 1;
-    g_initialized = 0;
 
     pthread_mutex_unlock(&g_init_mutex);
 
@@ -552,11 +558,17 @@ int stutter_is_seeded(void)
 
 int stutter_get_reseed_count(void)
 {
+    unsigned long count;
+
     if (!g_initialized) {
         return 0;
     }
 
-    return (int)g_accumulator.reseed_count;
+    count = g_accumulator.reseed_count;
+    if (count > (unsigned long)INT_MAX) {
+        return INT_MAX;
+    }
+    return (int)count;
 }
 
 /* ============================================================================
