@@ -1,0 +1,16 @@
+# Build artifacts
+obj/
+lib/
+bin/
+
+# Editor files
+*.swp
+*~
+.*.swp
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
