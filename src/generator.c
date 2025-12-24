@@ -20,7 +20,7 @@
 #include "stutter_internal.h"
 #include <string.h>
 
-/* Increment 128-bit counter (big-endian) */
+/* Increment 128-bit counter (MSB at index 0) */
 static void increment_counter(unsigned char counter[16])
 {
     int i;
@@ -39,10 +39,11 @@ void generator_init(stutter_generator_t *gen)
     gen->bytes_remaining = 0;
 }
 
-void generator_reseed(stutter_generator_t *gen, const unsigned char seed[32])
+int generator_reseed(stutter_generator_t *gen, const unsigned char seed[32])
 {
     unsigned char new_key[32];
     sha256_ctx_t ctx;
+    int result;
 
     if (gen->seeded) {
         /*
@@ -50,10 +51,23 @@ void generator_reseed(stutter_generator_t *gen, const unsigned char seed[32])
          * new_key = SHA256(old_key || seed)
          * This ensures forward secrecy: knowing seed alone is insufficient.
          */
-        sha256_init(&ctx);
-        sha256_update(&ctx, gen->key, 32);
-        sha256_update(&ctx, seed, 32);
-        sha256_final(&ctx, new_key);
+        result = sha256_init(&ctx);
+        if (result != STUTTER_OK) {
+            return result;
+        }
+        result = sha256_update(&ctx, gen->key, 32);
+        if (result != STUTTER_OK) {
+            return result;
+        }
+        result = sha256_update(&ctx, seed, 32);
+        if (result != STUTTER_OK) {
+            return result;
+        }
+        result = sha256_final(&ctx, new_key);
+        if (result != STUTTER_OK) {
+            platform_secure_zero(new_key, sizeof(new_key));
+            return result;
+        }
     } else {
         /* First seeding: use seed directly */
         memcpy(new_key, seed, 32);
@@ -63,7 +77,12 @@ void generator_reseed(stutter_generator_t *gen, const unsigned char seed[32])
     memcpy(gen->key, new_key, 32);
 
     /* Initialize AES with new key */
-    aes256_init(&gen->aes, new_key);
+    result = aes256_init(&gen->aes, new_key);
+    if (result != STUTTER_OK) {
+        platform_secure_zero(new_key, sizeof(new_key));
+        platform_secure_zero(gen->key, sizeof(gen->key));
+        return result;
+    }
 
     /*
      * SECURITY: Do NOT reset counter here.
@@ -90,6 +109,8 @@ void generator_reseed(stutter_generator_t *gen, const unsigned char seed[32])
 
     STUTTER_LOG("Generator reseeded, quota reset to %zu bytes",
                 gen->bytes_remaining);
+
+    return STUTTER_OK;
 }
 
 int generator_read(stutter_generator_t *gen, void *buf, size_t len)
@@ -98,6 +119,7 @@ int generator_read(stutter_generator_t *gen, void *buf, size_t len)
     unsigned char block[16];
     unsigned char new_key[32];
     size_t to_copy;
+    int result;
 
     if (!gen->seeded) {
         return STUTTER_ERR_NOT_INIT;
@@ -115,7 +137,11 @@ int generator_read(stutter_generator_t *gen, void *buf, size_t len)
     /* Generate requested bytes */
     while (len > 0) {
         /* Generate one block */
-        aes256_encrypt(&gen->aes, gen->counter, block);
+        result = aes256_encrypt(&gen->aes, gen->counter, block);
+        if (result != STUTTER_OK) {
+            platform_secure_zero(block, sizeof(block));
+            return result;
+        }
         increment_counter(gen->counter);
 
         /* Copy to output */
@@ -141,9 +167,19 @@ int generator_read(stutter_generator_t *gen, void *buf, size_t len)
      * Even if attacker captures state after this point, they cannot
      * recover the output we just generated.
      */
-    aes256_encrypt(&gen->aes, gen->counter, new_key);
+    result = aes256_encrypt(&gen->aes, gen->counter, new_key);
+    if (result != STUTTER_OK) {
+        platform_secure_zero(block, sizeof(block));
+        return result;
+    }
     increment_counter(gen->counter);
-    aes256_encrypt(&gen->aes, gen->counter, new_key + 16);
+
+    result = aes256_encrypt(&gen->aes, gen->counter, new_key + 16);
+    if (result != STUTTER_OK) {
+        platform_secure_zero(block, sizeof(block));
+        platform_secure_zero(new_key, sizeof(new_key));
+        return result;
+    }
     increment_counter(gen->counter);
 
     /* Update stored key for future reseed mixing */
@@ -151,7 +187,12 @@ int generator_read(stutter_generator_t *gen, void *buf, size_t len)
 
     /* Re-initialize AES with new key */
     aes256_done(&gen->aes);
-    aes256_init(&gen->aes, new_key);
+    result = aes256_init(&gen->aes, new_key);
+    if (result != STUTTER_OK) {
+        platform_secure_zero(block, sizeof(block));
+        platform_secure_zero(new_key, sizeof(new_key));
+        return result;
+    }
 
     /*
      * SECURITY: Do NOT reset counter here.

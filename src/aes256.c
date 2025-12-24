@@ -19,32 +19,51 @@
 #include <string.h>
 #include <openssl/evp.h>
 
-void aes256_init(aes256_ctx_t *ctx, const unsigned char key[32])
+int aes256_init(aes256_ctx_t *ctx, const unsigned char key[32])
 {
     ctx->ctx = EVP_CIPHER_CTX_new();
-    if (ctx->ctx != NULL) {
-        /*
-         * Initialize for AES-256-ECB encryption.
-         * ECB mode is used because we encrypt single blocks; the caller
-         * implements CTR mode by managing the counter externally.
-         * Padding is disabled since we always encrypt exactly 16 bytes.
-         */
-        EVP_EncryptInit_ex(ctx->ctx, EVP_aes_256_ecb(), NULL, key, NULL);
-        EVP_CIPHER_CTX_set_padding(ctx->ctx, 0);
+    if (ctx->ctx == NULL) {
+        return STUTTER_ERR_PLATFORM;
     }
+
+    /*
+     * Initialize for AES-256-ECB encryption.
+     * ECB mode is used because we encrypt single blocks; the caller
+     * implements CTR mode by managing the counter externally.
+     * Padding is disabled since we always encrypt exactly 16 bytes.
+     */
+    if (EVP_EncryptInit_ex(ctx->ctx, EVP_aes_256_ecb(), NULL, key, NULL) != 1) {
+        EVP_CIPHER_CTX_free(ctx->ctx);
+        ctx->ctx = NULL;
+        return STUTTER_ERR_PLATFORM;
+    }
+
+    if (EVP_CIPHER_CTX_set_padding(ctx->ctx, 0) != 1) {
+        EVP_CIPHER_CTX_free(ctx->ctx);
+        ctx->ctx = NULL;
+        return STUTTER_ERR_PLATFORM;
+    }
+
+    return STUTTER_OK;
 }
 
-void aes256_encrypt(const aes256_ctx_t *ctx,
-                    const unsigned char in[16],
-                    unsigned char out[16])
+int aes256_encrypt(const aes256_ctx_t *ctx,
+                   const unsigned char in[16],
+                   unsigned char out[16])
 {
     int outlen;
 
-    if (ctx->ctx != NULL) {
-        EVP_EncryptUpdate(ctx->ctx, out, &outlen, in, 16);
-    } else {
+    if (ctx->ctx == NULL) {
         memset(out, 0, 16);
+        return STUTTER_ERR_PLATFORM;
     }
+
+    if (EVP_EncryptUpdate(ctx->ctx, out, &outlen, in, 16) != 1) {
+        memset(out, 0, 16);
+        return STUTTER_ERR_PLATFORM;
+    }
+
+    return STUTTER_OK;
 }
 
 void aes256_done(aes256_ctx_t *ctx)
